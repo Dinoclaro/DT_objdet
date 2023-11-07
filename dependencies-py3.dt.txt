@@ -1,2 +1,10 @@
 # LIST YOUR DUCKIETOWN PYTHON3 PACKAGES HERE
 # NOTE: only place Duckietown libraries here; these libraries will be resolved to the latest available version and pinned; pin a specific version only if necessary
+aido-protocols-daffy
+duckietown-world-daffy
+
+# this is not HEAD, due to some issues with unashable objects (see DTSW-2042)
+git+https://github.com/duckietown/gym-duckietown.git@daffy-mooc2022
+
+# used to interface with the DCSS
+dt-data-api-daffy>=0.1.8
