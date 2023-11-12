@@ -2,3 +2,4 @@
 model_file: "/include/object_detection/weights/model.pt"
 speed: 0.0
 debug: True
+cmd_debug: False

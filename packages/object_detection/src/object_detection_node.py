@@ -31,10 +31,12 @@ class ObjectDetectionNode(DTROS):
 
         # Get vehicle name
         self.veh = rospy.get_namespace().strip("/")
-        self.avoid_duckies = False
-        self.gain: float = 0.0
-        self.const: float = 0.0
+
+        # Set Braitenberg parameters
+        self.gain: float = 1.0
+        self.const: float = 0.3
         self.straight = 0.0
+        self.stop = 0.0
         self.pwm_left = self.const
         self.pwm_right = self.const
         self.l_max = -math.inf
@@ -43,8 +45,8 @@ class ObjectDetectionNode(DTROS):
         self.r_min = math.inf
         self.left  = None
         self.right = None
-        self.execution_times = [] # YOLO
-        self.compute_times = [] # Braitenberg controller
+        # self.execution_times = [] # YOLO
+        # self.compute_times = [] # Braitenberg controller
 
 
         # Construct publishers
@@ -90,21 +92,16 @@ class ObjectDetectionNode(DTROS):
         self.bridge = CvBridge()
 
         # Configure AIDO
-        self.v = 0.2
         self.log("Starting model loading!")
         
         # Load Yolo model
         self._debug = rospy.get_param("~debug", True)
         self.model_wrapper = Wrapper()
         self.log("Finished model loading!")
+
+        # Set constants
         self.frame_id = 0
-        self.count = 0
-
-        # Choose Bratienberg config 
-        self.type = 0 # 0 for FEAR, 1 for EXPLORE
-        self.weight = 0  # 0 for Basic, 1 half, 2 for half and triangle
         self.first_image_received = False
-
         self.first_processing_done = False
 
         self.initialized = True
@@ -112,8 +109,7 @@ class ObjectDetectionNode(DTROS):
 
     def cb_episode_start(self, msg: EpisodeStart):
         self.log("Episode started")
-        self.avoid_duckies = False
-        self.pub_wheel_commands(self.const, self.const, msg.header)
+        self.pub_wheel_commands(self.stop, self.stop, msg.header)
 
     def image_cb(self, image_msg):
         '''
@@ -121,13 +117,12 @@ class ObjectDetectionNode(DTROS):
 
         Args:
             image_msg (sensor_msgs.msg.Image): The incoming image message.
-z
         Returns:
             None
         '''
+        # Dont move if not initialized
         if not self.initialized:
-            self.straight  = self.rescale(self.const, 0, (self.gain + self.const)) 
-            self.pub_wheel_commands(self.straight , self.straight , image_msg.header)
+            self.pub_wheel_commands(self.stop , self.stop , image_msg.header)
             return
 
         # Only call Yolo model after user specified frames
@@ -152,16 +147,16 @@ z
         rgb = cv2.resize(rgb, (IMAGE_SIZE, IMAGE_SIZE))
 
         # YOLOv5 prediction
-        start_time = time.time()
+        # start_time = time.time()
 
         bboxes, classes, scores = self.model_wrapper.predict(rgb)
 
-        execution_time = time.time() - start_time
-        self.execution_times.append(execution_time)
-        min_time_yolo = min(self.execution_times)
-        max_time_yolo = max(self.execution_times)
-        avg_time_yolo = sum(self.execution_times) / len(self.execution_times)
-        #self.log(f"YOLO time: Min: {min_time_yolo} \n Max:{max_time_yolo} \n Avg:{avg_time_yolo}")
+        # execution_time = time.time() - start_time
+        # self.execution_times.append(execution_time)
+        # min_time_yolo = min(self.execution_times)
+        # max_time_yolo = max(self.execution_times)
+        # avg_time_yolo = sum(self.execution_times) / len(self.execution_times)
+        # self.log(f"YOLO time: Min: {min_time_yolo} \n Max:{max_time_yolo} \n Avg:{avg_time_yolo}")
 
         detection = self.det2bool(bboxes, classes, scores)
 
@@ -173,11 +168,11 @@ z
 
             map = map_bare[:, :, 2]  # Index 0 corresponds to the red channel
             self.compute_commands(map)
-            compute_time = time.time() - start_time
-            self.compute_times.append(compute_time)
-            min_time_cont = min(self.compute_times)
-            max_time_cont = max(self.compute_times)
-            avg_time_cont = sum(self.compute_times) / len(self.compute_times)
+            # compute_time = time.time() - start_time
+            # self.compute_times.append(compute_time)
+            # min_time_cont = min(self.compute_times)
+            # max_time_cont = max(self.compute_times)
+            # avg_time_cont = sum(self.compute_times) / len(self.compute_times)
             #self.log(f"Compute time: Min: {min_time_cont} \n Max:{max_time_cont} \n Avg:{avg_time_cont}")
             self.pub_wheel_commands(self.pwm_left, self.pwm_right, image_msg.header)
         else:
@@ -234,7 +229,7 @@ z
         l = float(np.sum(map * self.left))
         r = float(np.sum(map * self.right))
 
-        self.log(f"Before normalization: {l}, {r}")
+        #self.log(f"Before normalization: {l}, {r}")
 
         # These are big numbers -- we want to normalize them.
         # We normalize them using the history
@@ -243,9 +238,6 @@ z
         self.r_max = max(r, self.r_max)
         self.l_min = min(l, self.l_min)
         self.r_min = min(r, self.r_min)
-        self.count += 1
-        
-        #self.log(f"count: {self.count}")
     
         # now rescale from 0 to 1
         ls = self.rescale(l, self.l_min, self.l_max)
@@ -284,7 +276,6 @@ z
 
         self.pub_wheel_cmd.publish(wheel_control_msg)
     
-
     def rescale(self, a: float, L: float, U: float):
         if np.allclose(L, U):
             return 0.0
@@ -304,27 +295,7 @@ z
             numpy.ndarray: The left motor activation matrix.
         '''
         res = np.zeros(shape=shape, dtype="float32")
-
-        if self.weight == 0:            # left half image
-
-            res[:, :int(shape[1]/2)] = 1
-
-        elif self.weight == 1:          # Rectangle bottom Left corner
-            half= int(shape[1]/2)
-            width = 250
-            res[width: , : half] = 1
-
-        elif self.weight == 2:          # Triangle Bottom left 
-
-            # Define the vertices of the triangle
-            vertices = np.array([[0, shape[1]], [shape[1]/2, shape[1]], [shape[1]/2, 150]], np.int32)
-
-            # Reshape vertices to fit the fillPoly function
-            vertices = vertices.reshape((-1, 1, 2))
-            # Fill the triangle with a color (in this case, red)
-            color = (1)
-            cv2.fillPoly(res, [vertices], color)# Define the vertices of the triangle
-
+        res[:, :int(shape[1]/2)] = 1
 
         return res
 
@@ -339,30 +310,7 @@ z
             numpy.ndarray: The left motor activation matrix.
         '''
         res = np.zeros(shape=shape, dtype="float32")
-        
-        if self.weight == 0:                   # Right half image
-            # r_max = 2000000.0
-            r_max = 0 
-            res[:, int(shape[1]/2):] = 1
-
-        elif self.weight == 1:                 # Rectangle bottom right
-            #r_max = 100000.0
-  
-            half= int(shape[1]/2)
-            width = 250
-            res[width: ,half :] = 1
-            
-        elif self.weight == 2:                  # Triangle Bottom right 
-
-            # Define the vertices of the triangle
-            vertices = np.array([[shape[1], shape[1]], [shape[1]/2, shape[1]], [shape[1]/2, 150]], np.int32)
-
-            # Reshape vertices to fit the fillPoly function
-            vertices = vertices.reshape((-1, 1, 2))
-
-            # Fill the triangle with a color (in this case, red)
-            color = (1)
-            cv2.fillPoly(res, [vertices], color)# Define the vertices of the triangle
+        res[:, int(shape[1]/2):] = 1
 
         return res
     
