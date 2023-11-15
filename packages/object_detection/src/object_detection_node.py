@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import cv2
 import math
 import numpy as np
@@ -20,94 +19,105 @@ from nn_model.constants import \
     filter_by_bboxes, \
     filter_by_scores
 
-
 class ObjectDetectionNode(DTROS):
     def __init__(self, node_name):
 
-        # Initialize the DTROS parent class
+        # intialise the DTROS parent class
         super(ObjectDetectionNode, self).__init__(node_name=node_name, node_type=NodeType.PERCEPTION)
-        self.initialized = False
-        self.log("Initializing!")
+        self.initialised = False
+        self.log("Initialising...")
 
-        # Get vehicle name
+        # Get the vehicle name
         self.veh = rospy.get_namespace().strip("/")
 
-        # Set Braitenberg parameters
+        # BRAITENBERG parameters 
+        self._time_debug = rospy.get_param("~time_debug", False) 
+            # Controller constants
         self.gain: float = 1.0
         self.const: float = 0.3
-        self.straight = 0.0
-        self.stop = 0.0
+        self.straight: float = 0.1
+        self.stop: float = 0.0
         self.pwm_left = self.const
         self.pwm_right = self.const
+            # Normalisation constants
         self.l_max = -math.inf
         self.r_max = -math.inf
         self.l_min = math.inf
         self.r_min = math.inf
+            # Weight matrices 
         self.left  = None
         self.right = None
-        # self.execution_times = [] # YOLO
-        # self.compute_times = [] # Braitenberg controller
-
-
-        # Construct publishers
+        
+        # PUBLISHERS
+        # TODO: investigate different queue sizes
+            # Wheel commands
         wheels_cmd_topic = f"/{self.veh}/wheels_driver_node/wheels_cmd"
         self.pub_wheel_cmd = rospy.Publisher(
-            wheels_cmd_topic,
-            WheelsCmdStamped,
-            queue_size=5,
-            dt_topic_type=TopicType.CONTROL
+        wheels_cmd_topic, WheelsCmdStamped, 
+        queue_size=1, 
+        dt_topic_type=TopicType.CONTROL
         )
 
-        self.pub_detections_image = rospy.Publisher(
+            # Detection image  
+        self.pub_detections_img = rospy.Publisher(
             "~image/compressed",
             CompressedImage,
             queue_size=1,
             dt_topic_type=TopicType.DEBUG
-        )
+        ) 
 
+            # Debug image
         self.pub_debug_img = rospy.Publisher(
             "~debug/debug_image/compressed",
-            CompressedImage,
+            CompressedImage, 
             queue_size=1,
-            dt_topic_type=TopicType.DEBUG,
+            dt_topic_type=TopicType.DEBUG
         )
 
-        # Construct subscribers
+        # SUBSCRIBERS
+            # Episode start
+            # TODO: investigate what this episode topic actually does
         episode_start_topic = f"/{self.veh}/episode_start"
         rospy.Subscriber(
             episode_start_topic,
             EpisodeStart,
-            self.cb_episode_start,
+            self.episode_start_cb,
             queue_size=1
         )
 
+            # Camera image
         self.sub_image = rospy.Subscriber(
             f"/{self.veh}/camera_node/image/compressed",
             CompressedImage,
             self.image_cb,
-            buff_size=10000000,
-            queue_size=1,
+            buff_size = 10000000,
+            queue_size = 1
         )
 
+        # BRIDGE
         self.bridge = CvBridge()
 
-        # Configure AIDO
-        self.log("Starting model loading!")
-        
-        # Load Yolo model
-        self._debug = rospy.get_param("~debug", True)
+        # YOLO MODEL
+            # Setting debug to True will display the image with the bounding boxes
+        self._debug = rospy.get_param("~debug", False) 
+            # Load Yolo model
+        self.log("Loading model...")
         self.model_wrapper = Wrapper()
-        self.log("Finished model loading!")
-
-        # Set constants
+        self.log("Model loaded")
+            # Initialise variables
         self.frame_id = 0
+        self.debug_color = (0, 0, 255)
         self.first_image_received = False
-        self.first_processing_done = False
+        self. first_processing_done = False 
 
-        self.initialized = True
-        self.log("Initialized!")
+        # Execution times
+        self.execution_times = []
 
-    def cb_episode_start(self, msg: EpisodeStart):
+        # Completed initialisation
+        self.initialised = True
+        self.log("Initialised")
+
+    def episode_start_cb(self, msg: EpisodeStart):
         self.log("Episode started")
         self.pub_wheel_commands(self.stop, self.stop, msg.header)
 
@@ -117,141 +127,227 @@ class ObjectDetectionNode(DTROS):
 
         Args:
             image_msg (sensor_msgs.msg.Image): The incoming image message.
-        Returns:
-            None
         '''
-        # Dont move if not initialized
-        if not self.initialized:
-            self.pub_wheel_commands(self.stop , self.stop , image_msg.header)
+        # Do not move if NOT intialised
+        if not self.initialised:
+            self.pub_wheel_commands(self.stop, self.stop, image_msg.header)
             return
+        
+        # Check to call YOLO model 
+        call = self.call_yolo()
+        if not call:
+            # If frame ID is not a factor use previous compute commands
+            self.pub_wheel_commands(self.pwm_left, self.pwm_right, image_msg.header)
+            return
+        else:
+            # Convert image message to cv2 image
+            try: 
+                bgr = self.bridge.compressed_imgmsg_to_cv2(image_msg)
+            except ValueError as e:
+                self.logger("Could not decode image: %s" % e)
+                return
+            
+            # Convert to RGB
+            rgb = bgr[..., ::-1]
+            # resize for YOLO
+            rgb = cv2.resize(rgb, (IMAGE_SIZE, IMAGE_SIZE))
 
-        # Only call Yolo model after user specified frames
+            # Run YOLO and inly time if debug is True
+            if self._time_debug:
+                start_time = time.time()
+                bboxes, classes, scores = self.model_wrapper.predict(rgb)
+                self.log(f"YOLO bboxes: {bboxes}, classes: {classes}, scores: {scores}")
+
+                self.log(f"YOLO runtime: {time.time() - start_time}")
+                execution_time = time.time() - start_time
+                self.execution_times.append(execution_time)
+                min_time_yolo = min(self.execution_times)
+                max_time_yolo = max(self.execution_times)
+                avg_time_yolo = sum(self.execution_times) / len(self.execution_times)
+                self.log(f"YOLO time: Min: {min_time_yolo} \n Max:{max_time_yolo} \n Avg:{avg_time_yolo}")
+            else: 
+                bboxes, classes, scores = self.model_wrapper.predict(rgb)
+            
+            # Filter detections
+            detection, box, cla, sco = self.filterDet(bboxes, classes, scores)
+
+            # Create detection map
+            detection_map = np.zeros((IMAGE_SIZE, IMAGE_SIZE, 3), np.uint8)
+
+            if detection: 
+                # populate detection map
+                detection_map = self.drawBbox(detection_map, box)
+                map = detection_map[:, :, 2]  # Index 0 corresponds to the red channel
+                self.compute_commands(map)
+        
+                self.pub_wheel_commands(self.pwm_left, self.pwm_right, image_msg.header)
+            else: 
+                # Drive straight if there are no valid detections 
+                self.pwm_left = self.straight
+                self.pwm_right = self.straight
+                self.pub_wheel_commands(self.pwm_left, self.pwm_right, image_msg.header) 
+
+            # Publish image
+            map_bgr = detection_map[..., ::-1]
+            weight_img = self.bridge.cv2_to_compressed_imgmsg(map_bgr)
+            self.pub_detections_img.publish(weight_img)
+
+            # Publish debug image
+            if self._debug:
+                if box == None:
+                   bgr = rgb[..., ::-1]
+                else:
+                   bgr = self.drawBbox(rgb, box)[..., ::-1]
+
+                # Publish detection debug image
+                obj_det_img = self.bridge.cv2_to_compressed_imgmsg(bgr)
+                self.pub_debug_img.publish(obj_det_img)
+
+    def pub_wheel_commands(self, pwm_left, pwm_right, header):
+        '''
+        Publishes the wheel commands to the wheels_driver_node.
+        '''
+        wheel_control_msg = WheelsCmdStamped()
+        wheel_control_msg.header = header
+
+        # Wheel topic commands 
+        wheel_control_msg.vel_left = pwm_left
+        wheel_control_msg.vel_right = pwm_right
+
+        if self._cmd_debug:
+            self.log(f"Publishing wheel commands: L = {wheel_control_msg.vel_left}, R = {wheel_control_msg.vel_right}")
+        # Publish wheel commands
+        self.pub_wheel_cmd.publish(wheel_control_msg)
+
+    def call_yolo(self):
+        '''
+        Returns True is the frame_id is a factor of NUMBER_FRAMES_SKIPPED, otherwise returns False.
+        '''
         self.frame_id += 1
         self.frame_id = self.frame_id % (1 + NUMBER_FRAMES_SKIPPED())
 
         if self.frame_id != 0:
-            self.pub_wheel_commands(self.pwm_left, self.pwm_right, image_msg.header)
-            return
-
-        # Decode from compressed image with OpenCV
-        try:
-            bgr = self.bridge.compressed_imgmsg_to_cv2(image_msg)
-        except ValueError as e:
-            self.logerr("Could not decode image: %s" % e)
-            return
-
-        # Convert from BGR to RGB for model
-        rgb = bgr[..., ::-1]
-
-        # Resize for model
-        rgb = cv2.resize(rgb, (IMAGE_SIZE, IMAGE_SIZE))
-
-        # YOLOv5 prediction
-        # start_time = time.time()
-
-        bboxes, classes, scores = self.model_wrapper.predict(rgb)
-
-        # execution_time = time.time() - start_time
-        # self.execution_times.append(execution_time)
-        # min_time_yolo = min(self.execution_times)
-        # max_time_yolo = max(self.execution_times)
-        # avg_time_yolo = sum(self.execution_times) / len(self.execution_times)
-        # self.log(f"YOLO time: Min: {min_time_yolo} \n Max:{max_time_yolo} \n Avg:{avg_time_yolo}")
-
-        detection = self.det2bool(bboxes, classes, scores)
-
-        # Only move for a valid detection
-        map_bare = np.zeros((IMAGE_SIZE, IMAGE_SIZE, 3), np.uint8)
-        if detection:
-            map_bare = self.valid_detection(map_bare, bboxes, classes, scores)
-                    # Wheel commands
-
-            map = map_bare[:, :, 2]  # Index 0 corresponds to the red channel
-            self.compute_commands(map)
-            # compute_time = time.time() - start_time
-            # self.compute_times.append(compute_time)
-            # min_time_cont = min(self.compute_times)
-            # max_time_cont = max(self.compute_times)
-            # avg_time_cont = sum(self.compute_times) / len(self.compute_times)
-            #self.log(f"Compute time: Min: {min_time_cont} \n Max:{max_time_cont} \n Avg:{avg_time_cont}")
-            self.pub_wheel_commands(self.pwm_left, self.pwm_right, image_msg.header)
-        else:
-            self.pwm_left = self.straight 
-            self.pwm_right = self.straight 
-            self.pub_wheel_commands(self.pwm_left, self.pwm_right, image_msg.header)
-        
-        # Publish image
-        map_bgr = map_bare[..., ::-1]
-        weight_img = self.bridge.cv2_to_compressed_imgmsg(map_bgr)
-        self.pub_debug_img.publish(weight_img)
-
-        # Publish debug image
-        if self._debug:
-             self.detect_debug(rgb, classes, bboxes)
-
-
-    def det2bool(self, bboxes, classes, scores):
-        box_ids = np.array(list(map(filter_by_bboxes, bboxes))).nonzero()[0]
-        cla_ids = np.array(list(map(filter_by_classes, classes))).nonzero()[0]
-        sco_ids = np.array(list(map(filter_by_scores, scores))).nonzero()[0]
-
-        box_cla_ids = set(list(box_ids)).intersection(set(list(cla_ids)))
-        box_cla_sco_ids = set(list(sco_ids)).intersection(set(list(box_cla_ids)))
-
-        if len(box_cla_sco_ids) > 0:
-            return True
-        else:
             return False
+        else: 
+            return True
+        
+    def filterDet(self, bboxes, classes, scores):
+        '''
+        Filters the detections by class, bounding box and score.
+        '''
+        # box = np.array(list(map(filter_by_bboxes, bboxes))).nonzero()
+        # cla = np.array(list(map(filter_by_classes, classes))).nonzero()
+        # sco = np.array(list(map(filter_by_scores, scores))).nonzero()
+
+        # box_cla_ids = set(list(box[0])).intersection(set(list(cla[0])))
+        # box_cla_sco_ids = set(list(sco[0])).intersection(set(list(box_cla_ids)))
+
+        # if len(box_cla_sco_ids) > 0:
+        #     return True, box, cla, sco 
+        # else:
+        #     return False, None, None, None
+
+        filtered_data = list(filter(lambda x: filter_by_bboxes(x[0]) and filter_by_classes(x[1]) and filter_by_scores(x[2]), zip(bboxes, classes, scores, )))
+        if len(filtered_data) > 0:
+            return True, list(map(lambda x: x[0], filtered_data)), list(map(lambda x: x[1], filtered_data)), list(map(lambda x: x[2], filtered_data))
+        else: 
+            return False, None, None, None
+        
+    def drawBbox(self, rgb, bboxes):
+        ''' 
+        Draws bounding boxes given an image. 
+        '''
+        color = (0, 0, 255)
+
+        for box in bboxes:
+            pt1 = np.array([int(box[0]), int(box[1])])
+            pt2 = np.array([int(box[2]), int(box[3])])
+
+            pt1 = tuple(pt1)
+            pt2 = tuple(pt2)
+            rgb = cv2.rectangle(rgb, pt1, pt2, color, thickness = 2)
+    
+        return rgb
     
     def compute_commands(self, map):
         '''
         Computes the left and right PWM commands based on the input map.
-
-        Args:
-            map (numpy.ndarray): The input map.
-
-        Returns:
-            float: The left PWM command.
         '''
-        # If we have not received any image, we don't move
-        if map is None:
+        if map is None: 
             return 0.0
-
-        if self.left is None:
+        
+        if self.left is None: 
             # if it is the first time, we initialize the structures
             shape = map.shape[0], map.shape[1]
-
             self.left = self.get_motor_left_matrix(shape)
             self.right = self.get_motor_right_matrix(shape)
-
-
-        # now we just compute the activation of our sensors
+        
+        # Compute the left and right activations 
         l = float(np.sum(map * self.left))
         r = float(np.sum(map * self.right))
 
-        #self.log(f"Before normalization: {l}, {r}")
+        # Normalise the activations
+        l_norm, r_norm = self.normalise(l, r)
 
-        # These are big numbers -- we want to normalize them.
-        # We normalize them using the history
-        # first, we remember the high/low of these raw signals
-        self.l_max = max(l, self.l_max)
-        self.r_max = max(r, self.r_max)
-        self.l_min = min(l, self.l_min)
-        self.r_min = min(r, self.r_min)
-    
-        # now rescale from 0 to 1
-        ls = self.rescale(l, self.l_min, self.l_max)
-        rs = self.rescale(r, self.r_min, self.r_max)
-        #self.log(f"after rescale: {ls}, {rs} \n max: {self.l_max}, {self.r_max} \n min: {self.l_min}, {self.r_min}")
-
-        self.pwm_left = self.const + ls * self.gain
-        self.pwm_left = self.rescale(self.pwm_left, 0, (self.gain + self.const))    # Max the pwm can be is (1*gain + const)
-        
-        self.pwm_right = self.const + rs * self.gain
-        self.pwm_right = self.rescale(self.pwm_right, 0, (self.gain + self.const))  # Max the pwm can be is (1*gain + const)
+        # Convert the activations to PWM commands
+        self.pwm_to_cmd(l_norm, r_norm)
 
         self.log(f"ls: {self.pwm_left}, rs: {self.pwm_right}")
+
+    def get_motor_left_matrix(self, shape: Tuple[int, int]) -> np.ndarray:
+        '''
+        Returns a matrix that represents the left half image activation based on the `weight` attribute.
+        '''
+        res = np.zeros(shape=shape, dtype="float32")
+        res[:, :int(shape[1]/2)] = 1
+        
+        return res
+
+    def get_motor_right_matrix(self, shape: Tuple[int, int]) -> np.ndarray:
+        '''
+        Returns a matrix that represents the right half image activation based on the `weight` attribute.
+        '''
+        res = np.zeros(shape=shape, dtype="float32")
+        res[:, int(shape[1]/2):] = 1
+
+        return res
     
+    def rescale(self, a: float, L: float, U: float):
+        '''
+            Rescales a value to the range [0, 1] given the lower and upper bounds.
+        '''
+        if np.allclose(L, U):
+            return 0.0
+        elif a > U:
+            return 1.0
+        
+        return (a - L) / (U - L)
+    
+    def normalise(self, l: float , r: float) -> Tuple[float, float]:
+        '''
+        Normalises the left and right values to the range [0, 1].
+        '''
+        self.l_max = max(self.l_max, l)
+        self.r_max = max(self.r_max, r)
+        self.l_min = min(self.l_min, l)
+        self.r_min = min(self.r_min, r)
+
+        l = self.rescale(l, self.l_min, self.l_max)
+        r = self.rescale(r, self.r_min, self.r_max)
+
+        return l, r
+
+    def pwm_to_cmd(self, ls: float, rs: float): 
+        '''
+        Converts a PWM value to a command value.
+        '''
+        self.pwm_left = self.const + ls * self.gain
+        # Max the pwm can be is (1*gain + const)
+        self.pwm_left = self.rescale(self.pwm_left, 0, (self.gain + self.const))     
+        
+        self.pwm_right = self.const + rs * self.gain
+        self.pwm_right = self.rescale(self.pwm_right, 0, (self.gain + self.const))  
+
     def pub_wheel_commands(self, pwm_left, pwm_right, header):
         '''
         Publishes the left and right PWM commands to the `pub_wheel_cmd` ROS topic.
@@ -275,116 +371,6 @@ class ObjectDetectionNode(DTROS):
         #self.log(f"vel_right: {wheel_control_msg.vel_right}")
 
         self.pub_wheel_cmd.publish(wheel_control_msg)
-    
-    def rescale(self, a: float, L: float, U: float):
-        if np.allclose(L, U):
-            return 0.0
-        elif a > U:
-            return 1.0
-        
-        return (a - L) / (U - L)
-    
-    def get_motor_left_matrix(self, shape: Tuple[int, int]) -> np.ndarray:
-        '''
-        Returns a matrix that represents the left haf image activation based on the `weight` attribute.
-
-        Args:
-            shape (Tuple[int, int]): The shape of the matrix.
-
-        Returns:
-            numpy.ndarray: The left motor activation matrix.
-        '''
-        res = np.zeros(shape=shape, dtype="float32")
-        res[:, :int(shape[1]/2)] = 1
-
-        return res
-
-    def get_motor_right_matrix(self, shape: Tuple[int, int]) -> np.ndarray:
-        '''
-        Returns a matrix that represents the right haf image activation based on the `weight` attribute.
-
-        Args:
-            shape (Tuple[int, int]): The shape of the matrix.
-
-        Returns:
-            numpy.ndarray: The left motor activation matrix.
-        '''
-        res = np.zeros(shape=shape, dtype="float32")
-        res[:, int(shape[1]/2):] = 1
-
-        return res
-    
-    def valid_detection(self, map_bare, bboxes, classes, scores):
-        '''
-        Draws filtered bounding boxes on the input `map_bare` image for valid object detections.
-
-        Args:
-            map_bare (numpy.ndarray): The input image.
-            bboxes (List[List[int]]): The bounding boxes for the detected objects.
-            classes (List[int]): The class labels for the detected objects.
-            scores (List[float]): The confidence scores for the detected objects.
-            start_time (float): The start time of the detection.
-            header (std_msgs.msg.Header): The header for the output image.
-
-        Returns:
-            numpy.ndarray: The output image with bounding boxes for valid object detections.
-        '''
-        for clas, box, score in zip(classes, bboxes, scores):
-            width = abs(box[2]-box[0])
-            length = abs(box[3]-box[1])
-            area = width*length
-            #self.log(f"width: {width}, length: {length}, Area: {area}")
-            if clas == 0: 
-                if score > SCORE:
-                    if area > AREA:
-                        pt1 = np.array([int(box[0]), int(box[1])])
-                        pt2 = np.array([int(box[2]), int(box[3])])
-
-                        pt1 = tuple(pt1)
-                        pt2 = tuple(pt2)
-
-                        color = (0, 0, 255)
-                        # draw bounding box
-                        map_bare = cv2.rectangle(map_bare, pt1, pt2, color, thickness = 2)
-        return map_bare
-
-    def detect_debug(self, rgb, classes, bboxes):
-        '''
-        Draws bounding boxes on the input `rgb` image for detected duckies.
-
-        Args:
-            rgb (numpy.ndarray): The input image.
-            classes (List[int]): The class labels for the detected objects.
-            bboxes (List[List[int]]): The bounding boxes for the detected objects.
-
-        Returns:
-            None
-        '''
-        colors = {0: (0, 255, 255), 1: (0, 165, 255), 2: (0, 250, 0), 3: (0, 0, 255), 4: (255, 0, 0)}
-        #names = {0: "duckie", 1: "cone", 2: "truck", 3: "bus", 4: "duckiebot"}
-        # font = cv2.FONT_HERSHEY_SIMPLEX
-        for clas, box in zip(classes, bboxes):
-            if clas == 0: 
-            
-                pt1 = np.array([int(box[0]), int(box[1])])
-                pt2 = np.array([int(box[2]), int(box[3])])
-
-                pt1 = tuple(pt1)
-                pt2 = tuple(pt2)
-
-                color = tuple(reversed(colors[clas]))
-                # name = names[clas]
-                
-                rgb = cv2.rectangle(rgb, pt1, pt2, color, thickness = 2)
-
-                # # label location
-                # text_location = (pt1[0], min(pt2[1] + 30, IMAGE_SIZE))
-                # rgb = cv2.putText(rgb, name, text_location, font, 1, color, thickness=2)
-
-        # Publish detection debug image
-        bgr = rgb[..., ::-1]
-        obj_det_img = self.bridge.cv2_to_compressed_imgmsg(bgr)
-        self.pub_detections_image.publish(obj_det_img)
     
 if __name__ == "__main__":
     # Initialize the node

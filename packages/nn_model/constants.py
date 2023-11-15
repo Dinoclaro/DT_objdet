@@ -3,7 +3,7 @@ from typing import Tuple
 
 ASSETS_DIR = "/code/catkin_ws/src/DT_objdet/packages/nn_model"
 IMAGE_SIZE = 416
-SCORE = 0.8 
+SCORE = 0.6
 AREA = 1000
 
 def DT_TOKEN() -> str:
@@ -37,12 +37,9 @@ def filter_by_classes(pred_class: int) -> bool:
     Args:
         pred_class: the class of a prediction
     """
-    # Right now, this returns True for every object's class
-    # TODO: Change this to only return True for duckies!
-    # In other words, returning False means that this prediction is ignored.
-    #if (pred_class == 0) | (pred_class == 4):
-
-    return True
+    # Only returning True for duckies
+    if (pred_class == 0):
+        return True
 
 
 def filter_by_scores(score: float) -> bool:
