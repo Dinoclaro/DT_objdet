@@ -35,7 +35,7 @@ class ObjectDetectionNode(DTROS):
             # Controller constants
         self.gain: float = 1.0
         self.const: float = 0.3
-        self.straight: float = 0.1
+        self.straight: float = 0.2
         self.stop: float = 0.0
         self.pwm_left = self.const
         self.pwm_right = self.const
