@@ -49,4 +49,5 @@ dts devel run -R ROBOT_NAME
 rqt_image_view
 ```
 
+## Issues
 Currently, the image only runs when built locally and with the master node running on the duckiebot. The image successfully builds on the duckiebot but fails to run due to ```torchvision``` crashing when using the ```dts devel run -H ROBOT_NAME``` command. 
