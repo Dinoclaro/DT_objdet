@@ -40,6 +40,13 @@ dts fleet discover ROBOT_NAME
 dts devel build -f
 dts devel run -R ROBOT_NAME
 ```
-## Issues 
+5. Open a new terminal and run the gui tools to use ROS tools
+```
+ dts start_gui_tools ROBOT_NAME
+```
+6 Open rqt image tools to view the various camera feeds including the YOLOv5 model predictions.
+```
+rqt_image_view
+```
 
 Currently, the image only runs when built locally and with the master node running on the duckiebot. The image successfully builds on the duckiebot but fails to run due to ```torchvision``` crashing when using the ```dts devel run -H ROBOT_NAME``` command. 
