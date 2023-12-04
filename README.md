@@ -18,7 +18,6 @@ The list below states the prerequisites to use this directory.
    - [Flashing SD Card](https://docs.duckietown.com/daffy/opmanual-duckiebot/setup/setup_sd_card/index.html)
    - [First Boot](https://docs.duckietown.com/daffy/opmanual-duckiebot/setup/setup_boot/index.html)
    - [Manual Control](https://docs.duckietown.com/daffy/opmanual-duckiebot/operations/make_it_move/index.html)
-The list below states the prerequisites to use this directory.
 
 ## Instructions
 
@@ -36,8 +35,11 @@ cd DT_objdet
 ```
 dts fleet discover ROBOT_NAME
 ```
-4. Build and run the image. Note this runs the object_detection_node on the users machine and connects to the duckiebot master node. 
+4. Build and run the image. Note this runs the object_detection_node on the user's machine and connects to the duckiebot master node. 
 ```
 dts devel build -f
 dts devel run -R ROBOT_NAME
 ```
+## Issues 
+
+Currently, the image only runs when built locally and with the master node running on the duckiebot. The image successfully builds on the duckiebot but fails to run due to ```torchvision``` crashing when using the ```dts devel run -H ROBOT_NAME``` command. 

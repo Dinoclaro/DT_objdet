@@ -35,7 +35,7 @@ class ObjectDetectionNode(DTROS):
             # Controller constants
         self.gain: float = 1.0
         self.const: float = 0.3
-        self.straight: float = 0.2
+        self.straight: float = 0.3
         self.stop: float = 0.0
         self.pwm_left = self.const
         self.pwm_right = self.const
@@ -67,7 +67,7 @@ class ObjectDetectionNode(DTROS):
         ) 
 
             # Debug image
-        self.pub_debug_img = rospy.Publisher(
+        self.pub_wheel_cmd_img = rospy.Publisher(
             "~debug/debug_image/compressed",
             CompressedImage, 
             queue_size=1,
@@ -152,7 +152,7 @@ class ObjectDetectionNode(DTROS):
             # resize for YOLO
             rgb = cv2.resize(rgb, (IMAGE_SIZE, IMAGE_SIZE))
 
-            # Run YOLO and inly time if debug is True
+            # Run YOLO and only time if debug is True
             if self._time_debug:
                 start_time = time.time()
                 bboxes, classes, scores = self.model_wrapper.predict(rgb)
@@ -201,7 +201,7 @@ class ObjectDetectionNode(DTROS):
 
                 # Publish detection debug image
                 obj_det_img = self.bridge.cv2_to_compressed_imgmsg(bgr)
-                self.pub_debug_img.publish(obj_det_img)
+                self.pub_wheel_cmd_img.publish(obj_det_img)
 
     def pub_wheel_commands(self, pwm_left, pwm_right, header):
         '''
@@ -235,18 +235,6 @@ class ObjectDetectionNode(DTROS):
         '''
         Filters the detections by class, bounding box and score.
         '''
-        # box = np.array(list(map(filter_by_bboxes, bboxes))).nonzero()
-        # cla = np.array(list(map(filter_by_classes, classes))).nonzero()
-        # sco = np.array(list(map(filter_by_scores, scores))).nonzero()
-
-        # box_cla_ids = set(list(box[0])).intersection(set(list(cla[0])))
-        # box_cla_sco_ids = set(list(sco[0])).intersection(set(list(box_cla_ids)))
-
-        # if len(box_cla_sco_ids) > 0:
-        #     return True, box, cla, sco 
-        # else:
-        #     return False, None, None, None
-
         filtered_data = list(filter(lambda x: filter_by_bboxes(x[0]) and filter_by_classes(x[1]) and filter_by_scores(x[2]), zip(bboxes, classes, scores, )))
         if len(filtered_data) > 0:
             return True, list(map(lambda x: x[0], filtered_data)), list(map(lambda x: x[1], filtered_data)), list(map(lambda x: x[2], filtered_data))
