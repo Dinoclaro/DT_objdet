@@ -2,7 +2,7 @@
 
 ## About the Directory
 
-This directory contains the ROS agent to run the YOLOv5 model and the Braitenberg controller as Duckietown compliant Docker image. 
+This directory contains a Duckietown-compliant Docker image of a ROS agent to run a YOLOv5 model and Braitenberg controller on a Duckiebot.
 
 ## Prerequisites
 
