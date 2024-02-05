@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+
+# Disclaimer: Script is modified from Duckietown-lx/object-detection repo.
+
 import cv2
 import math
 import numpy as np
@@ -76,7 +79,6 @@ class ObjectDetectionNode(DTROS):
 
         # SUBSCRIBERS
             # Episode start
-            # TODO: investigate what this episode topic actually does
         episode_start_topic = f"/{self.veh}/episode_start"
         rospy.Subscriber(
             episode_start_topic,
