@@ -4,6 +4,8 @@
 
 This directory contains a Duckietown-compliant Docker image of a ROS agent to run a YOLOv5 model and Braitenberg controller on a Duckiebot.
 
+This agent requires a trained YOLOv5 model. A default trained model can be used by setting `DT_token = dt1-3nT8KSoxVh4MnDRxovGLkXZDhPpgc4SzasJBTSxbRUfDguS-43dzqWFnWd8KBa1yev1g3UKnzVxZkkTbfeFCAD1kMCPQvvSVDYPfoXapvF29wVgdC7` in the `packages\nn_model\constants.py`. [DT_objdet_train](https://github.com/Dinoclaro/DT_objdet_train) deals with the training of a YOLOv5 model. 
+
 ## Prerequisites
 
 The list below states the prerequisites to use this directory.
